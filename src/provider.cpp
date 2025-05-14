@@ -131,20 +131,20 @@ void Provider::disconnectFromNetwork() {
 
 std::optional<nlohmann::json> get_json_result(const cpr::Response& r)
 {
-    log::debug(logcat, "get_json_result");
+    log::trace(logcat, "get_json_result");
     if (r.status_code != 200)
     {
-        log::debug(logcat, "http request returned status code {} with message \"{}\"", r.status_code, r.error.message);
+        log::warning(logcat, "http request returned status code {} with message \"{}\"", r.status_code, r.error.message);
         return std::nullopt;
     }
     try
     {
-        log::debug(logcat, "parsing json rpc result, r.text = \"{}\"", r.text);
+        log::trace(logcat, "parsing json rpc result, r.text = \"{}\"", r.text);
         auto responseJson = nlohmann::json::parse(r.text);
-        log::debug(logcat, "parsing json rpc result succeeded");
+        log::trace(logcat, "parsing json rpc result succeeded");
         if (responseJson.contains("result") and not responseJson["result"].is_null())
         {
-            log::debug(logcat, "returning parsed json result");
+            log::trace(logcat, "returning parsed json result");
             return std::move(responseJson["result"]);
         }
         log::warning(logcat, "json response missing \"result\" field (or is null), response: {}", responseJson.dump());
@@ -199,7 +199,7 @@ void Provider::makeJsonRpcRequest(std::string_view method,
     if (client_index >= clients.size())
     {
         lock.unlock();
-        log::debug(logcat, "Attempting to use provider client with index ({}) out of bounds.", client_index);
+        log::warning(logcat, "Attempting to use provider client with index ({}) out of bounds.", client_index);
         cb(std::nullopt);
         return;
     }
