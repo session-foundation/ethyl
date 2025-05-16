@@ -32,7 +32,7 @@ TEST_CASE( "Get balance from sepolia network", "[ethereum]" ) {
     auto balance = signer.provider->getBalance(std::string(ANVIL_ADDRESS));
 
     // Check that the balance is greater than zero
-    REQUIRE( balance != "" );
+    REQUIRE( balance != "0x0" );
 }
 
 TEST_CASE( "HashTest", "[utils]" ) {

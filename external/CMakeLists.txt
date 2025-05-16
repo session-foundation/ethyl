@@ -66,13 +66,3 @@ if(NOT TARGET nlohmann_json::nlohmann_json)
     set(JSON_MultipleHeaders ON CACHE BOOL "") # Allows multi-header nlohmann use
     system_or_submodule(NLOHMANN nlohmann_json nlohmann_json>=3.7.0 json)
 endif()
-
-#
-# GMP
-#
-
-if(NOT TARGET gmp::gmp)
-    pkg_check_modules(GMP gmp IMPORTED_TARGET REQUIRED GLOBAL)
-    add_library(gmp::gmp ALIAS PkgConfig::GMP)
-    message(STATUS "Found gmp ${GMP_VERSION}")
-endif()

@@ -26,7 +26,7 @@ cmake --build build --parallel --verbose
 ```
 # Update pacman and install dependencies
 pacman -Syuu # Terminal may prompt to restart before proceeding
-pacman -S git base-devel libargp-devel cmake gcc libcurl-devel gmp-devel autoconf automake libtool
+pacman -S git base-devel libargp-devel cmake gcc libcurl-devel autoconf automake libtool
 
 # Build
 cmake -B build -S .
