@@ -127,12 +127,36 @@ void Provider::disconnectFromNetwork() {
     log::debug(logcat, "Disconnected from the Ethereum network.");
 }
 
-std::optional<nlohmann::json> get_json_result(const cpr::Response& r)
-{
+// Filters a raw value (i.e. http response body for a failed request) to suppress control characters
+// and non-ascii, suitable for printing a safe value in logs.
+static std::string log_filter(std::string_view in, size_t max_len = 200) {
+    std::string result;
+    for (auto c : in) {
+        if (result.size() >= max_len) {
+            result += "...";
+            break;
+        }
+        if (c == 0x09)
+            result += "  ";
+        else if (c == 0x0a)
+            result += "\\n";
+        else if (c < 0x20 || c > 0x7e)
+            result += '.';
+        else
+            result += c;
+    }
+    return result;
+}
+
+std::optional<nlohmann::json> get_json_result(const cpr::Response& r) {
     log::trace(logcat, "get_json_result");
-    if (r.status_code != 200)
-    {
-        log::warning(logcat, "http request returned status code {} with message \"{}\"", r.status_code, r.error.message);
+    if (r.status_code == 0) {
+        log::warning(logcat, "http request failed: {}", r.error.message);
+        return std::nullopt;
+    }
+    if (r.status_code != 200) {
+        log::warning(
+                logcat, "http request returned error: {}:\n{}", r.status_line, log_filter(r.text));
         return std::nullopt;
     }
     try
