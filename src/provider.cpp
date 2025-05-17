@@ -15,8 +15,6 @@
 #include "ethyl/provider.hpp"
 #include "ethyl/utils.hpp"
 
-#include <gmp.h>
-
 namespace
 {
 auto logcat = oxen::log::Cat("ethyl");
@@ -698,29 +696,10 @@ void Provider::getBalanceAsync(std::string_view address, optional_callback<std::
     params.push_back("latest");
 
     auto cb = [user_cb=std::move(user_cb)](std::optional<nlohmann::json> r) {
-        if (!r)
-        {
-            user_cb(std::nullopt);
-            return;
-        }
-
-        std::string balanceHex = r->get<std::string>();
-
-        // Convert balance from hex to GMP multi-precision integer
-
-        std::optional<std::string> bal10;
-        mpz_t balance;
-        // 0 as base to automatically pick up hex from the prepended 0x of our balanceHex string
-        if (int rc = mpz_init_set_str(balance, balanceHex.c_str(), 0); rc == 0) {
-            bal10.emplace();
-            bal10->resize(mpz_sizeinbase(balance, 10) + 1);
-            mpz_get_str(bal10->data(), 10, balance);
-            bal10->resize(std::strlen(bal10->c_str()));
-        } else {
-            log::warning(logcat, "eth_getBalance response, failed to parse bigint: {}", balanceHex);
-        }
-        mpz_clear(balance);
-        user_cb(std::move(bal10));
+        std::optional<std::string> balanceHex;
+        if (r)
+            balanceHex = r->get<std::string>();
+        user_cb(std::move(balanceHex));
     };
     makeJsonRpcRequest("eth_getBalance", params, std::move(cb));
 }
