@@ -27,7 +27,7 @@ int main(int argc, char *argv[]) {
     return result;
 }
 
-TEST_CASE( "Get balance from sepolia network", "[ethereum]" ) {
+TEST_CASE("Get balance from sepolia network", "[ethereum][network]") {
     // Get the balance of the test address
     auto balance = signer.provider->getBalance(std::string(ANVIL_ADDRESS));
 
@@ -97,7 +97,7 @@ TEST_CASE( "Signs an unsigned transaction correctly", "[transaction]" ) {
     REQUIRE(signature_hex_string == "02f86a0101808082520894a6c077fd9283421c657ecea8a9c1422cc6cebc80880de0b6b3a764000080c080a084987299f8dd115333356ab03430ca8de593e03ba03d4ecd72daf15205119cf8a0216c9869da3497ae96dcb98713908af1a0abf866c12d51def821caf0374cccbb" );
 }
 
-TEST_CASE( "Does a self transfer", "[transaction]" ) {
+TEST_CASE("Does a self transfer", "[transaction][network]") {
     auto provider = signer.provider;
     Transaction tx(std::string(ANVIL_ADDRESS), 100000000000000, 21000);
     tx.chainId = 31337; //LOCAL
@@ -111,17 +111,77 @@ TEST_CASE( "Does a self transfer", "[transaction]" ) {
     REQUIRE(provider->transactionSuccessful(hash));
 }
 
-TEST_CASE( "Does a self transfer on network using signer to populate", "[transaction]" ) {
+TEST_CASE("Does a self transfer on network using signer to populate", "[transaction][network]") {
     Transaction tx(std::string(ANVIL_ADDRESS), 100000000000000, 21000);
     const auto hash = signer.sendTransaction(tx, ANVIL_PRIVATE_KEY);
     REQUIRE(hash != "");
     REQUIRE(signer.provider->transactionSuccessful(hash));
 }
 
-TEST_CASE("Test multiple clients", "[provider]") {
+TEST_CASE("Test multiple clients", "[provider][network]") {
     auto provider = Provider::make_provider();
     provider->setTimeout(std::chrono::milliseconds(1000));
     provider->addClient("Client", "127.0.0.1:8545");
     provider->addClient("Bad Client", "127.0.0.1:8546"); // Add non-existent client
     CHECK(provider->connectToNetwork());
+}
+
+TEST_CASE("Generate key pair preserves existing return order", "[signer]") {
+    auto [secret, pub] = signer.generate_key_pair();
+
+    // NOTE:
+    // signer.hpp currently says "Returns <Pubkey, Seckey>", but implementation
+    // currently returns {seckey, pubkey}. This test documents existing behavior
+    // so the security cleanup does not accidentally become an API behavior change.
+    REQUIRE(secret.size() == 32);
+    REQUIRE(pub.size() == 33);
+
+    REQUIRE(signer.secretKeyToAddressString(secret).starts_with("0x"));
+}
+
+TEST_CASE("Generated private key is valid", "[signer]") {
+    auto [secret, pub] = signer.generate_key_pair();
+
+    REQUIRE(secret.size() == 32);
+    REQUIRE(pub.size() == 33);
+
+    Bytes20 address = signer.secretKeyToAddress(secret);
+
+    REQUIRE(address.size() == 20);
+}
+
+TEST_CASE("Generated key can sign messages", "[signer]") {
+    auto [secret, pub] = signer.generate_key_pair();
+
+    const auto signature = signer.signMessage("temporary generated key signing test", secret);
+
+    REQUIRE(signature.size() == 65);
+}
+
+TEST_CASE("sign32 returns expected compact signature size", "[signer]") {
+    Bytes32 hash = utils::hashBytes("sign32 regression test");
+
+    const auto signature = signer.sign32(hash, PRIVATE_KEY);
+
+    REQUIRE(signature.size() == 65);
+}
+
+TEST_CASE("sign32 failure does not corrupt successful signing behavior", "[signer]") {
+    Bytes32 hash = utils::hashBytes("repeat signing regression test");
+
+    const auto sig1 = signer.sign32(hash, PRIVATE_KEY);
+    const auto sig2 = signer.sign32(hash, PRIVATE_KEY);
+
+    REQUIRE(sig1.size() == 65);
+    REQUIRE(sig2.size() == 65);
+
+    // secp256k1 default ECDSA signing is deterministic for the same key/hash.
+    REQUIRE(sig1 == sig2);
+}
+
+TEST_CASE("Signing rejects invalid private key", "[signer]") {
+    Bytes32 hash = utils::hashBytes("invalid private key test");
+    std::array<unsigned char, 32> invalid_key = {};
+
+    REQUIRE_THROWS_AS(signer.sign32(hash, invalid_key), std::runtime_error);
 }

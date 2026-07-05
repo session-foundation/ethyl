@@ -142,6 +142,10 @@ int ecdsa() {
                                                  &sig, msg_hash, &pubkey);
     assert(is_signature_valid2 == is_signature_valid);
 
+    ethyl_secure_erase(randomize, sizeof(randomize));
+    ethyl_secure_erase(serialized_signature, sizeof(serialized_signature));
+    ethyl_secure_erase(&sig, sizeof(sig));
+
     /* It's best practice to try to clear secrets from memory after using them.
      * This is done because some bugs can allow an attacker to leak memory, for
      * example through "out of bounds" array access (see Heartbleed), Or the OS

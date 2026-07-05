@@ -58,6 +58,18 @@ add_library(
     ${sources}
 )
 
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang")
+    target_compile_options(${PROJECT_NAME} PRIVATE -Wno-deprecated-declarations)
+
+    if (TARGET basic_tests)
+        target_compile_options(basic_tests PRIVATE -Wno-deprecated-declarations)
+    endif()
+
+    if (TARGET ethereum_client_tests)
+        target_compile_options(ethereum_client_tests PRIVATE -Wno-deprecated-declarations)
+    endif()
+endif()
+
 #
 # Unit testing setup
 #
