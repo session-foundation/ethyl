@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <optional>
+#include <variant>
 #include <queue>
 #include <chrono>
 #include <mutex>
@@ -64,6 +65,21 @@ public:
 
     using json_result_callback = optional_callback<nlohmann::json>;
 
+    /// An error response to a JSON-RPC request (as opposed to a failure to get a response at all).
+    struct JsonRpcError {
+        int64_t code = 0;
+        std::string message;
+
+        /// True if this is the error of an eth_call whose execution reverted (as calling a
+        /// function that the contract doesn't have does).
+        bool is_execution_reverted() const;
+    };
+
+    /// The outcome of a JSON-RPC request: its result, an error response, or (monostate) no usable
+    /// response at all, such as after a connection failure or timeout.
+    using json_response = std::variant<std::monostate, nlohmann::json, JsonRpcError>;
+    using json_response_callback = std::function<void(json_response)>;
+
     /** Add a RPC backend for interacting with the Ethereum network.
      *
      * The provider does not ensure that no duplicates are added to the list.
@@ -90,6 +106,10 @@ public:
     void getTransactionCountAsync(std::string_view address, std::string_view blockTag, optional_callback<uint64_t> user_cb);
     nlohmann::json callReadFunctionJSON(std::string_view address, std::string_view data, std::string_view blockNumber = "latest");
     void callReadFunctionJSONAsync(std::string_view address, std::string_view data, json_result_callback user_cb, std::string_view blockNumber = "latest");
+    /// Like callReadFunctionJSONAsync, but reports an error response (such as an execution revert)
+    /// separately from a failure to get any response.  Unlike the other requests, an error response
+    /// is not retried with the next client: it is the answer.
+    void callReadFunctionAsync(std::string_view address, std::string_view data, json_response_callback user_cb, std::string_view blockNumber = "latest");
     std::string callReadFunction(std::string_view address, std::string_view data, std::string_view blockNumber = "latest");
     std::string callReadFunction(std::string_view address, std::string_view data, uint64_t blockNumber);
 
@@ -149,6 +169,14 @@ public:
                                      json_result_callback cb,
                                      std::forward_list<size_t> client_indices = {},
                                      bool should_try_next = true);
+    /// Like makeJsonRpcRequest, but reports the full outcome.  If `retry_error_response` is false
+    /// then an error response is reported rather than retried with the next client.
+    void makeJsonRpcRequestResponse(std::string_view method,
+                                     const nlohmann::json& params,
+                                     json_response_callback cb,
+                                     std::forward_list<size_t> client_indices = {},
+                                     bool should_try_next = true,
+                                     bool retry_error_response = true);
     std::optional<nlohmann::json> makeJsonRpcRequest(std::string_view method,
                                      const nlohmann::json& params,
                                      std::forward_list<size_t> client_indices = {},

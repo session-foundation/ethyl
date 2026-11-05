@@ -148,39 +148,50 @@ static std::string log_filter(std::string_view in, size_t max_len = 200) {
     return result;
 }
 
-std::optional<nlohmann::json> get_json_result(const cpr::Response& r) {
-    log::trace(logcat, "get_json_result");
+bool Provider::JsonRpcError::is_execution_reverted() const {
+    // Geth-derived nodes (including Arbitrum's) use code 3 for a revert carrying revert data, and
+    // report one without data as a generic -32000 "execution reverted".
+    return code == 3 || message.starts_with("execution reverted");
+}
+
+static Provider::json_response get_json_response(const cpr::Response& r) {
+    log::trace(logcat, "get_json_response");
     if (r.status_code == 0) {
         log::warning(logcat, "http request failed: {}", r.error.message);
-        return std::nullopt;
-    }
-    if (r.status_code != 200) {
-        log::warning(
-                logcat, "http request returned error: {}:\n{}", r.status_line, log_filter(r.text));
-        return std::nullopt;
+        return std::monostate{};
     }
     try
     {
         log::trace(logcat, "parsing json rpc result, r.text = \"{}\"", r.text);
         auto responseJson = nlohmann::json::parse(r.text);
         log::trace(logcat, "parsing json rpc result succeeded");
-        if (responseJson.contains("result") and not responseJson["result"].is_null())
+        if (r.status_code == 200 && responseJson.contains("result") and not responseJson["result"].is_null())
         {
             log::trace(logcat, "returning parsed json result");
             return std::move(responseJson["result"]);
         }
-        log::warning(logcat, "json response missing \"result\" field (or is null), response: {}", responseJson.dump());
-        if (auto it = responseJson.find("error"); it != responseJson.end())
+        // Some providers send an error response with a non-200 status, so look for one regardless.
+        if (auto it = responseJson.find("error"); it != responseJson.end() && it->is_object())
         {
-            log::debug(logcat, "{}", responseJson.dump());
-            log::warning(logcat, "json error: {}", (*it)["message"].get<std::string_view>());
+            // Not a warning here: an error response can be an expected answer (such as a revert
+            // from a function a contract may not have), which only the caller can tell.
+            log::debug(logcat, "json error response: {}", responseJson.dump());
+            Provider::JsonRpcError err;
+            err.code = it->value("code", int64_t{0});
+            err.message = it->value("message", std::string{});
+            return err;
         }
+        log::warning(logcat, "json response missing \"result\" field (or is null), response: {}", responseJson.dump());
     }
     catch (const std::exception& e)
     {
-        log::debug(logcat, "json response failed to parse: ", e.what());
+        if (r.status_code != 200)
+            log::warning(
+                    logcat, "http request returned error: {}:\n{}", r.status_line, log_filter(r.text));
+        else
+            log::debug(logcat, "json response failed to parse: {}", e.what());
     }
-    return std::nullopt;
+    return std::monostate{};
 }
 
 void Provider::makeJsonRpcRequest(std::string_view method,
@@ -188,6 +199,27 @@ void Provider::makeJsonRpcRequest(std::string_view method,
         json_result_callback cb,
         std::forward_list<size_t> client_indices,
         bool should_try_next) {
+    makeJsonRpcRequestResponse(
+            method,
+            params,
+            [cb = std::move(cb), method](json_response response) {
+                if (auto* result = std::get_if<nlohmann::json>(&response))
+                    return cb(std::move(*result));
+                // The caller only learns that there was no result, so the error is reported here
+                if (auto* err = std::get_if<JsonRpcError>(&response))
+                    log::warning(logcat, "json error from {}: {} ({})", method, err->message, err->code);
+                cb(std::nullopt);
+            },
+            std::move(client_indices),
+            should_try_next);
+}
+
+void Provider::makeJsonRpcRequestResponse(std::string_view method,
+        const nlohmann::json& params,
+        json_response_callback cb,
+        std::forward_list<size_t> client_indices,
+        bool should_try_next,
+        bool retry_error_response) {
 
     std::unique_lock lock{mutex};
     if (clients.empty()) {
@@ -203,7 +235,7 @@ void Provider::makeJsonRpcRequest(std::string_view method,
     {
         lock.unlock();
         log::warning(logcat, "attempting jsonrpc request to eth provider, but client_order is empty.  You get nothing!  You lose!  Good day, sir!");
-        cb(std::nullopt);
+        cb(std::monostate{});
         return;
     }
 
@@ -222,14 +254,14 @@ void Provider::makeJsonRpcRequest(std::string_view method,
     {
         lock.unlock();
         log::warning(logcat, "Attempting to use provider client with index ({}) out of bounds.", client_index);
-        cb(std::nullopt);
+        cb(std::monostate{});
         return;
     }
     auto url = clients[client_index].url;
     auto session = get_client_session(url);
     session->SetBody(body);
     session->SetHeader({{"Content-Type", "application/json"}});
-    auto post_cb = [self=weak_from_this(), cb=std::move(cb), url=std::move(url), session, method, params, client_indices=std::move(client_indices), should_try_next](cpr::Response r){
+    auto post_cb = [self=weak_from_this(), cb=std::move(cb), url=std::move(url), session, method, params, client_indices=std::move(client_indices), should_try_next, retry_error_response](cpr::Response r){
         log::trace(logcat, "entering makeJsonRpcRequest PostCallback callback");
 
         auto ptr = self.lock();
@@ -245,22 +277,25 @@ void Provider::makeJsonRpcRequest(std::string_view method,
         // TODO(doyle): It is worth it in the future to give stats on which
         // client failed and return it to the caller so that they can have some
         // mitigation strategy when a client is frequently failing.
-        std::optional<nlohmann::json> result_json;
-        if (result_json = get_json_result(r); result_json)
+        auto response = get_json_response(r);
+        if (auto* result = std::get_if<nlohmann::json>(&response))
         {
 #ifndef NDEBUG
-            log::debug(logcat, "makeJsonRpcRequest returning: {}", result_json->dump());
+            log::debug(logcat, "makeJsonRpcRequest returning: {}", result->dump());
 #endif
-            cb(result_json);
+            cb(std::move(response));
             return;
         }
+        bool error_response = std::holds_alternative<JsonRpcError>(response);
 
-        if (should_try_next and not client_indices.empty())
+        if (should_try_next and not client_indices.empty() and (retry_error_response or not error_response))
         {
-            ptr->makeJsonRpcRequest(method, params, std::move(cb), std::move(client_indices), true);
+            if (auto* err = std::get_if<JsonRpcError>(&response))
+                log::warning(logcat, "json error from {} at {}: {} ({}); trying the next client", method, url, err->message, err->code);
+            ptr->makeJsonRpcRequestResponse(method, params, std::move(cb), std::move(client_indices), true, retry_error_response);
             return;
         }
-        cb(std::nullopt);
+        cb(std::move(response));
         return;
     };
     auto result_future = session->PostCallback(std::move(post_cb));
@@ -296,6 +331,20 @@ void Provider::callReadFunctionJSONAsync(
             "eth_call",
             nlohmann::json{{{"to", address}, {"data", data}}, blockNumber},
             std::move(user_cb));
+}
+
+void Provider::callReadFunctionAsync(
+        std::string_view address,
+        std::string_view data,
+        json_response_callback user_cb,
+        std::string_view blockNumber) {
+    makeJsonRpcRequestResponse(
+            "eth_call",
+            nlohmann::json{{{"to", address}, {"data", data}}, blockNumber},
+            std::move(user_cb),
+            {},
+            true,
+            /*retry_error_response=*/false);
 }
 
 std::string Provider::callReadFunction(
